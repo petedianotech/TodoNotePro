@@ -7,6 +7,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write   # Required to push the APK to the apk branch
+
 jobs:
   build:
     name: Build Debug APK
@@ -30,7 +33,7 @@ jobs:
       - name: Install NDK and CMake (required for C++ core)
         run: |
           sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1"
-          sdkmanager --licenses || true
+          yes | sdkmanager --licenses || true
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -57,8 +60,6 @@ jobs:
       - name: Build Debug APK
         run: |
           ./gradlew assembleDebug --stacktrace --no-daemon
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
       - name: Upload Debug APK as Artifact
         uses: actions/upload-artifact@v4
@@ -69,7 +70,7 @@ jobs:
           if-no-files-found: error
 
       - name: Push APK to apk branch
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
         run: |
           # Prepare APK
           mkdir -p release
@@ -81,17 +82,17 @@ jobs:
 
           # Checkout or create apk branch
           git fetch origin apk || true
-          git checkout -B apk origin/apk 2>/dev/null || git checkout -B apk
+          git checkout -B apk origin/apk 2>/dev/null || git checkout --orphan apk
 
-          # Copy APK and commit
+          # Keep only the apk folder
+          git rm -rf . 2>/dev/null || true
           mkdir -p apk
           cp release/TodoNotePro-debug.apk apk/TodoNotePro-debug.apk
           echo "Last built: $(date -u)" > apk/BUILD_INFO.txt
           echo "Commit: ${{ github.sha }}" >> apk/BUILD_INFO.txt
           echo "Branch: ${{ github.ref_name }}" >> apk/BUILD_INFO.txt
+          echo "Workflow: ${{ github.workflow }}" >> apk/BUILD_INFO.txt
 
           git add apk/
           git commit -m "chore: update debug APK from ${{ github.sha }}" || echo "No changes to commit"
           git push origin apk --force
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
