@@ -1,0 +1,58 @@
+name: Build Debug APK
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew || true
+
+      - name: Build Debug APK
+        run: |
+          # Create a minimal gradlew if missing (first-time setup)
+          if [ ! -f gradlew ]; then
+            echo "Gradle wrapper not found. Generating..."
+            # Fallback: use system gradle if available, or download
+            curl -sL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o gradle.zip
+            unzip -q gradle.zip
+            ./gradle-8.9/bin/gradle wrapper --gradle-version 8.9
+          fi
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14
+
+      - name: Upload mapping (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            app/build/outputs/logs/
+            **/build/reports/
+          if-no-files-found: ignore
