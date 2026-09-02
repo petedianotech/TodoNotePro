@@ -9,50 +9,89 @@ on:
 
 jobs:
   build:
+    name: Build Debug APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew || true
+      - name: Install NDK and CMake (required for C++ core)
+        run: |
+          sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1"
+          sdkmanager --licenses || true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Generate Gradle Wrapper (if missing)
+        run: |
+          if [ ! -f gradlew ]; then
+            echo "Generating Gradle Wrapper..."
+            curl -sL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /tmp
+            /tmp/gradle-8.9/bin/gradle wrapper --gradle-version 8.9 --distribution-type bin
+            chmod +x gradlew
+          else
+            chmod +x gradlew
+          fi
 
       - name: Build Debug APK
         run: |
-          # Create a minimal gradlew if missing (first-time setup)
-          if [ ! -f gradlew ]; then
-            echo "Gradle wrapper not found. Generating..."
-            # Fallback: use system gradle if available, or download
-            curl -sL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o gradle.zip
-            unzip -q gradle.zip
-            ./gradle-8.9/bin/gradle wrapper --gradle-version 8.9
-          fi
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug --stacktrace --no-daemon
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
-      - name: Upload Debug APK
+      - name: Upload Debug APK as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: TodoNotePro-debug
           path: app/build/outputs/apk/debug/*.apk
-          retention-days: 14
+          retention-days: 30
+          if-no-files-found: error
 
-      - name: Upload mapping (if any)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            app/build/outputs/logs/
-            **/build/reports/
-          if-no-files-found: ignore
+      - name: Push APK to apk branch
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          # Prepare APK
+          mkdir -p release
+          cp app/build/outputs/apk/debug/*.apk release/TodoNotePro-debug.apk
+
+          # Configure git
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Checkout or create apk branch
+          git fetch origin apk || true
+          git checkout -B apk origin/apk 2>/dev/null || git checkout -B apk
+
+          # Copy APK and commit
+          mkdir -p apk
+          cp release/TodoNotePro-debug.apk apk/TodoNotePro-debug.apk
+          echo "Last built: $(date -u)" > apk/BUILD_INFO.txt
+          echo "Commit: ${{ github.sha }}" >> apk/BUILD_INFO.txt
+          echo "Branch: ${{ github.ref_name }}" >> apk/BUILD_INFO.txt
+
+          git add apk/
+          git commit -m "chore: update debug APK from ${{ github.sha }}" || echo "No changes to commit"
+          git push origin apk --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
